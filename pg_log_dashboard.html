@@ -1,0 +1,996 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PostgreSQL Log Analyzer — DBA X-Ray</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0"></script>
+<script src="recommendations.js"></script>
+<style>
+  :root {
+    --bg: #f0f2f5; --surface: #ffffff; --surface2: #f8f9fb;
+    --border: #e2e8f0; --text: #1a202c; --text2: #4a5568; --text3: #718096;
+    --primary: #3b82f6; --primary-light: #eff6ff;
+    --green: #10b981; --green-light: #ecfdf5;
+    --red: #ef4444; --red-light: #fef2f2;
+    --orange: #f59e0b; --orange-light: #fffbeb;
+    --purple: #8b5cf6; --purple-light: #f5f3ff;
+    --teal: #14b8a6; --teal-light: #f0fdfa;
+    --shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.05);
+    --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.07), 0 2px 4px -1px rgba(0,0,0,0.04);
+    --radius: 12px; --radius-sm: 8px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; min-height: 100vh; }
+
+  header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 24px; display: flex; align-items: center; gap: 16px; height: 60px; position: sticky; top: 0; z-index: 100; box-shadow: var(--shadow); }
+  .header-logo { width: 32px; height: 32px; background: linear-gradient(135deg, #3b82f6, #14b8a6); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 16px; font-weight: 700; flex-shrink: 0; }
+  header h1 { font-size: 16px; font-weight: 600; white-space: nowrap; }
+  header h1 span { color: var(--text3); font-weight: 400; font-size: 13px; margin-left: 6px; }
+  .header-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+  .file-name { color: var(--text3); font-size: 12px; font-family: monospace; max-width: 280px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .btn-upload { background: var(--primary); color: #fff; border: none; border-radius: 6px; padding: 6px 16px; font-size: 13px; cursor: pointer; font-weight: 500; display: inline-flex; align-items: center; gap: 6px; transition: background 0.15s; }
+  .btn-upload:hover { background: #2563eb; }
+  .btn-remove { background: var(--red); color: #fff; border: none; border-radius: 6px; padding: 6px 10px; font-size: 13px; cursor: pointer; font-weight: 500; transition: background 0.15s; display: none; }
+  .btn-remove:hover { background: #dc2626; }
+  input[type="file"] { display: none; }
+  .log-select { background: var(--surface); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 6px 12px; font-size: 12px; font-family: monospace; outline: none; cursor: pointer; max-width: 260px; display: none; }
+
+  .tab-bar { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 24px; display: flex; gap: 0; position: sticky; top: 60px; z-index: 99; box-shadow: var(--shadow); }
+  .tab-btn { padding: 12px 20px; font-size: 13px; font-weight: 600; color: var(--text3); cursor: pointer; border: none; background: none; border-bottom: 2px solid transparent; transition: all 0.2s; display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .tab-btn:hover { color: var(--text2); background: var(--surface2); }
+  .tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); }
+  .tab-btn .tab-icon { font-size: 15px; }
+  .tab-page { display: none; }
+  .tab-page.active { display: block; }
+
+  main { max-width: 1600px; margin: 0 auto; padding: 24px; }
+
+  .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); gap: 16px; margin-bottom: 24px; }
+  .kpi-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; box-shadow: var(--shadow); position: relative; overflow: hidden; transition: box-shadow 0.2s; }
+  .kpi-card:hover { box-shadow: var(--shadow-md); }
+  .kpi-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; }
+  .kpi-card.blue::before { background: var(--primary); } .kpi-card.green::before { background: var(--green); }
+  .kpi-card.red::before { background: var(--red); } .kpi-card.orange::before { background: var(--orange); }
+  .kpi-card.purple::before { background: var(--purple); } .kpi-card.teal::before { background: var(--teal); }
+  .kpi-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text3); margin-bottom: 8px; }
+  .kpi-value { font-size: 26px; font-weight: 700; color: var(--text); line-height: 1; }
+  .kpi-sub { font-size: 11px; color: var(--text3); margin-top: 6px; }
+  .kpi-icon { position: absolute; top: 16px; right: 16px; font-size: 22px; opacity: 0.15; }
+
+  .charts-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+  @media (max-width: 900px) { .charts-row { grid-template-columns: 1fr; } }
+  .chart-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; box-shadow: var(--shadow); }
+  .chart-card.full { grid-column: 1 / -1; }
+  .card-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; display: flex; align-items: center; gap: 8px; }
+  .card-title .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .card-subtitle { font-size: 12px; color: var(--text3); margin-bottom: 16px; }
+
+  .table-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; box-shadow: var(--shadow); margin-bottom: 24px; }
+  .table-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 12px; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { background: var(--surface2); color: var(--text3); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  td { padding: 10px 12px; border-bottom: 1px solid #f1f5f9; color: var(--text2); vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: var(--surface2); }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; }
+
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+  .badge-fatal { background: var(--red-light); color: var(--red); }
+  .badge-error { background: rgba(239, 68, 68, 0.15); color: var(--red); }
+  .badge-warn  { background: var(--orange-light); color: var(--orange); }
+  .badge-log   { background: var(--primary-light); color: var(--primary); }
+
+  .filter-input { background: var(--surface); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 6px 12px; font-size: 13px; width: 300px; outline: none; }
+  .filter-input:focus { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary-light); }
+  .filter-select { background: var(--surface); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 6px 12px; font-size: 13px; outline: none; cursor: pointer; }
+
+  .btn-sm { background: var(--surface); color: var(--text2); border: 1px solid var(--border); border-radius: 4px; padding: 4px 10px; font-size: 11px; font-weight: 600; cursor: pointer; transition: all 0.15s; }
+  .btn-sm:hover { border-color: var(--primary); color: var(--primary); }
+  .btn-sm.active { border-color: var(--primary); background: var(--primary-light); color: var(--primary); }
+
+  .section-heading { font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+  .section-count { background: var(--primary-light); color: var(--primary); font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 10px; }
+
+  .raw-log-container { background: #1a1d23; color: #d4d4d4; padding: 8px; border-radius: var(--radius-sm); max-height: 500px; overflow-y: auto; font-family: 'Consolas', 'Courier New', monospace; font-size: 12px; line-height: 1.6; }
+  .raw-log-line { padding: 3px 6px; border-bottom: 1px solid #2a2d35; word-break: break-all; white-space: pre-wrap; }
+  .raw-log-line:hover { background: #22262e; }
+
+  .detail-row { display: none; }
+  .detail-row.open { display: table-row; }
+  .detail-row > td { padding: 4px 12px 16px 12px !important; background: var(--surface2) !important; }
+
+  .empty-state { text-align: center; padding: 40px; color: var(--text3); font-size: 13px; }
+
+  #loading { position: fixed; inset: 0; background: rgba(240,242,245,0.85); display: none; align-items: center; justify-content: center; z-index: 999; font-size: 15px; font-weight: 600; color: var(--text2); gap: 12px; flex-direction: column; }
+  .spinner { width: 32px; height: 32px; border: 4px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .switch { position: relative; width: 36px; height: 20px; cursor: pointer; display: inline-block; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch-track { position: absolute; inset: 0; background: var(--border); border-radius: 10px; transition: background 0.2s; }
+  .switch input:checked + .switch-track { background: var(--primary); }
+  .switch-knob { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; background: #fff; border-radius: 50%; box-shadow: 0 1px 3px rgba(0,0,0,0.2); transition: transform 0.2s; }
+  .switch input:checked ~ .switch-knob { transform: translateX(16px); }
+  .tab-dark-wrap { margin-left: auto; display: flex; align-items: center; padding: 0 12px; gap: 6px; font-size: 13px; color: var(--text3); }
+
+  .query-cell { max-width: 500px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .duration-slow { color: var(--red); font-weight: 600; }
+  .duration-warn { color: var(--orange); }
+  
+  .rec-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 16px; padding: 16px; }
+  .rec-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; box-shadow: var(--shadow); border-left: 4px solid var(--primary); display:flex; flex-direction:column; }
+  .rec-card.CRITICAL { border-left-color: var(--red); }
+  .rec-card.WARNING { border-left-color: var(--orange); }
+  .rec-card.INFO { border-left-color: var(--primary); }
+  .rec-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .rec-title { font-weight: 600; font-size: 15px; color: var(--text); }
+  .rec-badge { font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px; color: #fff; }
+  .rec-badge.CRITICAL { background: var(--red); }
+  .rec-badge.WARNING { background: var(--orange); }
+  .rec-badge.INFO { background: var(--primary); }
+  .rec-desc { font-size: 13px; color: var(--text2); line-height: 1.5; margin-bottom: 12px; flex:1; }
+  .rec-link { font-size: 13px; color: var(--primary); text-decoration: none; font-weight: 500; align-self: flex-start; }
+  .rec-link:hover { text-decoration: underline; }
+
+  body.dark {
+    --bg: #0f172a; --surface: #1e293b; --surface2: #162032;
+    --border: #2d3f55; --text: #f1f5f9; --text2: #cbd5e1; --text3: #94a3b8;
+    --primary-light: #172554; --green-light: #052e16; --red-light: #450a0a;
+    --orange-light: #431407; --purple-light: #2e1065; --teal-light: #042f2e;
+    --shadow: 0 1px 3px rgba(0,0,0,0.5); --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.5);
+  }
+  body.dark td { border-bottom-color: var(--border); }
+  body.dark #loading { background: rgba(15,23,42,0.85); }
+  body.dark .filter-input, body.dark .filter-select, body.dark .log-select { background: var(--surface2); color: var(--text2); }
+  body.dark .detail-row > td { background: var(--surface) !important; }
+</style>
+</head>
+<body>
+
+<div id="loading"><div class="spinner"></div><div>Analisando Log...</div></div>
+
+<header>
+  <div class="header-logo">P</div>
+  <h1>PostgreSQL <span>Log Analyzer</span></h1>
+  <div class="header-right">
+    <div id="logMultiSelect" style="position:relative; display:none;">
+      <button class="log-select" id="btnLogDropdown" onclick="toggleLogDropdown()" style="display:inline-block; margin:0; padding:6px 12px; cursor:pointer;">Logs (0) &#9662;</button>
+      <div id="logDropdownPanel" style="display:none; position:absolute; top:100%; right:0; background:var(--surface); border:1px solid var(--border); border-radius:6px; box-shadow:var(--shadow-md); padding:8px; z-index:1000; min-width:280px; max-height:300px; overflow-y:auto; margin-top:4px;"></div>
+    </div>
+    <input type="file" id="logFileInput" accept=".log,.txt,.csv" multiple>
+    <button class="btn-upload" onclick="document.getElementById('logFileInput').click()">&#128194; Carregar Log(s)</button>
+  </div>
+</header>
+
+<div class="tab-bar">
+  <button class="tab-btn active" onclick="switchTab('overview')" id="tab-btn-overview"><span class="tab-icon">&#128202;</span> Visão Geral</button>
+  <button class="tab-btn" onclick="switchTab('errors')" id="tab-btn-errors"><span class="tab-icon">&#9888;</span> Top Erros</button>
+  <button class="tab-btn" onclick="switchTab('connections')" id="tab-btn-connections"><span class="tab-icon">&#128279;</span> Conexões</button>
+
+  <button class="tab-btn" onclick="switchTab('samples')" id="tab-btn-samples"><span class="tab-icon">&#128221;</span> Log Finder</button>
+  <button class="tab-btn" onclick="switchTab('recommendations')" id="tab-btn-recommendations"><span class="tab-icon">&#128161;</span> Recomendações</button>
+  <div class="tab-dark-wrap">
+    <span>&#9728;</span>
+    <label class="switch" title="Dark mode"><input type="checkbox" id="dark-toggle" onchange="toggleDark(this.checked)"><span class="switch-track"></span><span class="switch-knob"></span></label>
+    <span>&#9790;</span>
+  </div>
+</div>
+
+<main>
+
+<!-- ══════ TAB: VISÃO GERAL ══════ -->
+<div class="tab-page active" id="page-overview">
+  <div class="kpi-grid">
+    <div class="kpi-card blue"><div class="kpi-icon">&#128196;</div><div class="kpi-label">Linhas Parseadas</div><div class="kpi-value" id="kpi-total">—</div><div class="kpi-sub">Total de eventos</div></div>
+    <div class="kpi-card red"><div class="kpi-icon">&#10071;</div><div class="kpi-label">FATAL / PANIC</div><div class="kpi-value" id="kpi-fatal">—</div><div class="kpi-sub">Sessões ou servidor abortados</div></div>
+    <div class="kpi-card orange"><div class="kpi-icon">&#9888;</div><div class="kpi-label">ERROR</div><div class="kpi-value" id="kpi-error">—</div><div class="kpi-sub">Queries ou permissões negadas</div></div>
+    <div class="kpi-card purple"><div class="kpi-icon">&#9888;</div><div class="kpi-label">WARNING</div><div class="kpi-value" id="kpi-warning">—</div><div class="kpi-sub">Avisos e alertas do engine</div></div>
+    <div class="kpi-card teal"><div class="kpi-icon">&#128279;</div><div class="kpi-label">Conexões</div><div class="kpi-value" id="kpi-conn">—</div><div class="kpi-sub">Novas conexões recebidas</div></div>
+    <div class="kpi-card purple"><div class="kpi-icon">&#128268;</div><div class="kpi-label">Desconexões</div><div class="kpi-value" id="kpi-disconn">—</div><div class="kpi-sub">Sessões encerradas</div></div>
+  </div>
+
+  <div class="charts-row">
+    <div class="chart-card">
+      <div class="card-title"><span class="dot" style="background:var(--purple)"></span>Erros por Banco de Dados</div>
+      <div class="card-subtitle">Distribuição de ERROR/FATAL agrupados por database</div>
+      <div style="height:260px"><canvas id="chartDbErrors"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="card-title"><span class="dot" style="background:var(--green)"></span>Distribuição de Severidade</div>
+      <div class="card-subtitle">Proporção de LOG vs WARNING vs ERROR vs FATAL no arquivo</div>
+      <div style="height:260px"><canvas id="chartSeverity"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════ TAB: TOP ERROS ══════ -->
+<div class="tab-page" id="page-errors">
+  <div class="table-card">
+    <div class="table-header">
+      <div class="section-heading">Top Padrões de Erro <span class="section-count" id="error-group-count">0</span></div>
+      <div style="font-size:12px;color:var(--text3)">Agrupamento inteligente — clique em "▾ Amostras" para expandir as linhas cruas</div>
+    </div>
+    <div class="table-wrap">
+      <table id="errorsTable">
+        <thead><tr>
+          <th style="width:90px">Nível</th>
+          <th style="width:120px">Database</th>
+          <th>Padrão Extraído</th>
+          <th style="width:100px;text-align:right">Ocorrências</th>
+          <th style="width:110px;text-align:center">Amostras</th>
+        </tr></thead>
+        <tbody id="tbody-errors"><tr><td colspan="5" class="empty-state">Carregue um arquivo de log para visualizar.</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ══════ TAB: CONEXÕES ══════ -->
+<div class="tab-page" id="page-connections">
+  <div class="table-card">
+    <div class="table-header">
+      <div class="section-heading" style="display:flex;align-items:center;gap:12px">
+        Atividade de Conexão por Usuário / App <span class="section-count" id="conn-user-count">0</span>
+        <button class="btn-sm" style="font-size:11px;padding:2px 8px;display:none" onclick="resetConnSort()" id="btn-reset-conn" title="Restaurar agrupamento original por database">Resetar Ordem</button>
+      </div>
+      <div style="font-size:12px;color:var(--text3)">Identifique quais aplicações mais abrem/fecham conexões (churn excessivo)</div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Database</th><th>Aplicação</th><th>Usuário</th><th style="text-align:right;cursor:pointer;user-select:none" onclick="sortConn('conn')" id="th-conn" title="Clique para ordenar">Conexões</th><th style="text-align:right;cursor:pointer;user-select:none" onclick="sortConn('disconn')" id="th-disconn" title="Clique para ordenar">Desconexões</th><th style="text-align:right;cursor:pointer;user-select:none" onclick="sortConn('sslerr')" id="th-sslerr" title="Clique para ordenar">SSL Errors</th></tr></thead>
+        <tbody id="tbody-conn-users"><tr><td colspan="6" class="empty-state">Carregue um arquivo de log.</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ══════ TAB: AMOSTRAGEM ══════ -->
+<div class="tab-page" id="page-samples">
+  <div class="table-card">
+    <div class="table-header">
+      <div class="section-heading">Log Finder</div>
+      <div style="display:flex;gap:12px">
+        <input type="text" id="searchInput" class="filter-input" placeholder="Filtrar por texto, query, PID, user..." oninput="debouncedRenderSamples()">
+        <select id="levelFilter" class="filter-select" onchange="renderSamples()">
+          <option value="ALL">Todos</option>
+          <option value="ERROR">ERROR</option>
+          <option value="FATAL">FATAL/PANIC</option>
+          <option value="WARNING">WARNING</option>
+          <option value="LOG">LOG</option>
+        </select>
+      </div>
+    </div>
+    <div style="margin-bottom:12px;font-size:12px;color:var(--text3)" id="sampleCountDisplay">Carregue um arquivo.</div>
+    <div class="raw-log-container" id="rawLogsContainer"><div class="empty-state">Nenhum dado.</div></div>
+  </div>
+</div>
+
+<!-- ══════ TAB: RECOMENDAÇÕES ══════ -->
+<div class="tab-page" id="page-recommendations">
+  <div class="table-card">
+    <div class="table-header">
+      <div class="section-heading">Recomendações Ativas <span class="section-count" id="rec-count">0</span></div>
+      <div style="font-size:12px;color:var(--text3)">Ações sugeridas pelo DBA Virtual com base nas anomalias detectadas no log carregado.</div>
+    </div>
+    <div id="recommendations-container" class="rec-grid">
+      <div class="empty-state" style="grid-column: 1 / -1; margin-top:20px;">Carregue um arquivo de log para análise.</div>
+    </div>
+  </div>
+</div>
+
+</main>
+
+<script>
+Chart.register(ChartDataLabels);
+Chart.defaults.plugins.datalabels.display = false;
+
+// ═══════════════════════════════════════
+// State — Multi-Log
+// ═══════════════════════════════════════
+var logFiles = {};       // { filename: [entries] }
+var selectedLogs = [];
+var logFilesInitialized = {};
+
+// Derived state (rebuilt on file switch)
+var logEntries = [];
+var errorGroups = {};
+var connStats = {};
+var checkpointList = [];
+var charts = {};
+var debounceTimer = null;
+
+// Regex principal (fora das funções para performance)
+var mainRe = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) UTC \[(\d+)\]: (db=[^,]*,user=[^,]*,app=[^,]*,client=\S*)\s+(ERROR|FATAL|PANIC|WARNING|LOG):\s+(.*)/;
+
+// ═══════════════════════════════════════
+// Dark Mode
+// ═══════════════════════════════════════
+function toggleDark(on) {
+  document.body.classList.toggle('dark', on);
+  localStorage.setItem('pgtheme', on ? 'dark' : 'light');
+  redrawCharts();
+}
+if (localStorage.getItem('pgtheme') === 'dark') {
+  document.getElementById('dark-toggle').checked = true;
+  document.body.classList.add('dark');
+}
+
+function isDark() { return document.body.classList.contains('dark'); }
+function themeColors() {
+  var d = isDark();
+  return { text: d ? '#f1f5f9' : '#1a202c', grid: d ? '#2d3f55' : '#e2e8f0', muted: d ? '#94a3b8' : '#718096' };
+}
+
+// ═══════════════════════════════════════
+// Tabs
+// ═══════════════════════════════════════
+function switchTab(id) {
+  document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
+  document.querySelectorAll('.tab-page').forEach(function(p) { p.classList.remove('active'); });
+  document.getElementById('tab-btn-' + id).classList.add('active');
+  document.getElementById('page-' + id).classList.add('active');
+}
+
+// ═══════════════════════════════════════
+// Multi-Log File Reader
+// ═══════════════════════════════════════
+document.getElementById('logFileInput').addEventListener('change', function(e) {
+  var files = e.target.files;
+  if (!files || files.length === 0) return;
+  document.getElementById('loading').style.display = 'flex';
+
+  var pending = files.length;
+  for (var i = 0; i < files.length; i++) {
+    (function(file) {
+      var reader = new FileReader();
+      reader.onload = function(ev) {
+        var entries = parseFileToEntries(ev.target.result);
+        logFiles[file.name] = entries;
+        pending--;
+        if (pending === 0) {
+          updateLogSelector();
+          rebuildAndRender();
+          document.getElementById('loading').style.display = 'none';
+        }
+      };
+      reader.readAsText(file);
+    })(files[i]);
+  }
+  // Reset input so same file can be re-loaded
+  e.target.value = '';
+});
+
+function updateLogSelector() {
+  var names = Object.keys(logFiles).sort();
+  var container = document.getElementById('logMultiSelect');
+  var panel = document.getElementById('logDropdownPanel');
+  var btn = document.getElementById('btnLogDropdown');
+  
+  if (names.length === 0) {
+    container.style.display = 'none';
+    return;
+  }
+  container.style.display = 'inline-block';
+  panel.innerHTML = '';
+  
+  var activeCount = 0;
+  for (var i = 0; i < names.length; i++) {
+    var name = names[i];
+    if (selectedLogs.indexOf(name) === -1 && !logFilesInitialized[name]) {
+       selectedLogs.push(name);
+       logFilesInitialized[name] = true;
+    }
+    var isChecked = selectedLogs.indexOf(name) !== -1;
+    if (isChecked) activeCount++;
+    
+    var div = document.createElement('div');
+    div.style.display = 'flex';
+    div.style.alignItems = 'center';
+    div.style.justifyContent = 'space-between';
+    div.style.padding = '4px 0';
+    div.style.gap = '8px';
+    
+    var lbl = document.createElement('label');
+    lbl.style.display = 'flex';
+    lbl.style.alignItems = 'center';
+    lbl.style.gap = '6px';
+    lbl.style.cursor = 'pointer';
+    lbl.style.fontSize = '12px';
+    lbl.style.fontFamily = 'monospace';
+    lbl.style.flex = '1';
+    lbl.style.overflow = 'hidden';
+    
+    var cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.value = name;
+    cb.checked = isChecked;
+    cb.onchange = function() {
+      if (this.checked) selectedLogs.push(this.value);
+      else selectedLogs = selectedLogs.filter(function(n) { return n !== this.value; }.bind(this));
+      updateLogSelector();
+      rebuildAndRender();
+    };
+    
+    lbl.appendChild(cb);
+    var txt = document.createElement('span');
+    txt.textContent = name;
+    txt.style.overflow = 'hidden';
+    txt.style.textOverflow = 'ellipsis';
+    txt.style.whiteSpace = 'nowrap';
+    lbl.appendChild(txt);
+    
+    var delBtn = document.createElement('button');
+    delBtn.innerHTML = '&#10005;';
+    delBtn.style.background = 'transparent';
+    delBtn.style.border = 'none';
+    delBtn.style.color = 'var(--red)';
+    delBtn.style.cursor = 'pointer';
+    delBtn.style.padding = '0 4px';
+    delBtn.title = 'Remover arquivo da memória';
+    delBtn.onclick = (function(n) {
+      return function() {
+        delete logFiles[n];
+        delete logFilesInitialized[n];
+        selectedLogs = selectedLogs.filter(function(x) { return x !== n; });
+        updateLogSelector();
+        rebuildAndRender();
+      };
+    })(name);
+    
+    div.appendChild(lbl);
+    div.appendChild(delBtn);
+    panel.appendChild(div);
+  }
+  
+  btn.innerHTML = 'Logs (' + activeCount + '/' + names.length + ') &#9662;';
+}
+
+function toggleLogDropdown() {
+  var p = document.getElementById('logDropdownPanel');
+  p.style.display = p.style.display === 'none' ? 'block' : 'none';
+}
+
+document.addEventListener('click', function(e) {
+  var c = document.getElementById('logMultiSelect');
+  if (c && !c.contains(e.target)) {
+    document.getElementById('logDropdownPanel').style.display = 'none';
+  }
+});
+
+// ═══════════════════════════════════════
+// Parser — calibrado para Azure Flexible Server
+// Formato: 2026-08-09 22:00:00 UTC [PID]: db=X,user=Y,app=Z,client=W LEVEL:  message
+// ═══════════════════════════════════════
+function parseFileToEntries(raw) {
+  var entries = [];
+  var lines = raw.split('\n');
+  var currentEntry = null;
+
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    if (!line) continue;
+    var trimmed = line.trim();
+    if (!trimmed) continue;
+
+    var m = line.match(mainRe);
+    if (m) {
+      if (currentEntry) entries.push(currentEntry);
+      var meta = parseMeta(m[3]);
+      currentEntry = {
+        raw: line,
+        rawLower: line.toLowerCase(),
+        timestamp: m[1],
+        hour: m[1].substring(0, 13),
+        pid: m[2],
+        db: meta.db,
+        user: meta.user,
+        app: meta.app,
+        client: meta.client,
+        level: m[4].toUpperCase(),
+        message: m[5].trim()
+      };
+    } else if (currentEntry) {
+      currentEntry.raw += '\n' + line;
+      currentEntry.rawLower += '\n' + line.toLowerCase();
+      currentEntry.message += ' ' + trimmed;
+    }
+  }
+  if (currentEntry) entries.push(currentEntry);
+  return entries;
+}
+
+function parseMeta(str) {
+  var result = { db: '', user: '', app: '', client: '' };
+  var parts = str.split(',');
+  for (var i = 0; i < parts.length; i++) {
+    var kv = parts[i].split('=');
+    if (kv.length >= 2) {
+      var key = kv[0].trim();
+      var val = kv.slice(1).join('=').trim();
+      if (key === 'db') result.db = val;
+      else if (key === 'user') result.user = val;
+      else if (key === 'app') result.app = val;
+      else if (key === 'client') result.client = val;
+    }
+  }
+  return result;
+}
+
+// ═══════════════════════════════════════
+// Rebuild derived state from selected log(s)
+// ═══════════════════════════════════════
+function rebuildAndRender() {
+  // Merge entries from selected file(s)
+  logEntries = [];
+  for (var i = 0; i < selectedLogs.length; i++) {
+    if (logFiles[selectedLogs[i]]) {
+      var entries = logFiles[selectedLogs[i]];
+      for (var k = 0; k < entries.length; k++) {
+        logEntries.push(entries[k]);
+      }
+    }
+  }
+
+  // Reset derived state
+  errorGroups = {};
+  connStats = {};
+  checkpointList = [];
+  connSortCol = 'default';
+  connSortAsc = false;
+
+  var stats = { total: 0, error: 0, fatal: 0, warning: 0, conn: 0, disconn: 0, chk: 0, slow: 0, log: 0 };
+
+  for (var j = 0; j < logEntries.length; j++) {
+    stats.total++;
+    classifyEntry(logEntries[j], stats);
+  }
+
+  renderAll(stats);
+}
+
+function classifyEntry(entry, stats) {
+  var msg = entry.message;
+  var lvl = entry.level;
+  var isSSLError = msg.indexOf('SSL error') !== -1;
+
+  if (lvl === 'ERROR') stats.error++;
+  else if (lvl === 'FATAL' || lvl === 'PANIC') stats.fatal++;
+  else if (lvl === 'WARNING') stats.warning++;
+  else if (lvl === 'LOG') stats.log++;
+
+  // Conexões
+  if (msg.indexOf('connection received:') !== -1) {
+    stats.conn++;
+    trackConn(entry, 'conn');
+  }
+  if (msg.indexOf('disconnection:') !== -1) {
+    stats.disconn++;
+    trackConn(entry, 'disconn');
+  }
+  if (isSSLError) {
+    trackConn(entry, 'sslerr');
+  }
+
+  // Agrupar erros
+  if (lvl === 'ERROR' || lvl === 'FATAL' || lvl === 'PANIC' || lvl === 'WARNING' || isSSLError) {
+    var pattern = normalizeMsg(msg);
+    var displayLvl = (isSSLError && lvl === 'LOG') ? 'SSL_ERR' : lvl;
+    var groupKey = displayLvl + '||' + (entry.db || '-') + '||' + pattern;
+    if (!errorGroups[groupKey]) {
+      errorGroups[groupKey] = { pattern: pattern, level: displayLvl, db: entry.db || '-', count: 0, samples: [] };
+    }
+    errorGroups[groupKey].count++;
+    if (errorGroups[groupKey].samples.length < 50) {
+      errorGroups[groupKey].samples.push(entry);
+    }
+  }
+}
+
+function trackConn(entry, type) {
+  var key = (entry.user || '[unknown]') + '|' + (entry.app || '[unknown]') + '|' + (entry.db || '[unknown]');
+  if (!connStats[key]) connStats[key] = { user: entry.user || '[unknown]', app: entry.app || '[unknown]', db: entry.db || '[unknown]', conn: 0, disconn: 0, sslerr: 0 };
+  connStats[key][type]++;
+}
+
+function normalizeMsg(msg) {
+  var n = msg;
+  if (n.length > 200) n = n.substring(0, 200);
+  n = n.replace(/\b\d{4,}\b/g, 'N');
+  n = n.replace(/"[^"]*"/g, '"..."');
+  n = n.replace(/\\\\"[^\\]*\\\\"/g, '"..."');
+  if (n.indexOf('.') !== -1 || n.indexOf(':') !== -1) {
+    n = n.replace(/\b(?:fd[0-9a-f:]+|(?:\d{1,3}\.){3}\d{1,3})\b/gi, '<IP>');
+  }
+  n = n.replace(/port=\d+/g, 'port=N');
+  if (n.length > 200) n = n.substring(0, 200) + '...';
+  return n;
+}
+
+// ═══════════════════════════════════════
+// Renderização Principal
+// ═══════════════════════════════════════
+function renderAll(stats) {
+  document.getElementById('kpi-total').textContent = stats.total.toLocaleString();
+  document.getElementById('kpi-error').textContent = stats.error.toLocaleString();
+  document.getElementById('kpi-fatal').textContent = stats.fatal.toLocaleString();
+  document.getElementById('kpi-warning').textContent = stats.warning.toLocaleString();
+  document.getElementById('kpi-conn').textContent = stats.conn.toLocaleString();
+  document.getElementById('kpi-disconn').textContent = stats.disconn.toLocaleString();
+
+  renderErrorsTable();
+  renderConnectionsTable();
+  renderSamples();
+  renderRecommendations(stats);
+  drawAllCharts(stats);
+}
+
+// ═══════════════════════════════════════
+// Tabela de Top Erros
+// ═══════════════════════════════════════
+function renderErrorsTable() {
+  var tbody = document.getElementById('tbody-errors');
+  tbody.innerHTML = '';
+  var groups = Object.keys(errorGroups).map(function(k) { return errorGroups[k]; });
+  var sysDBs = { 'azure_sys': 1, 'azure_maintenance': 2, 'postgres': 3, 'template1': 4 };
+  groups.sort(function(a, b) {
+    var aIsSys = sysDBs[a.db] || 99;
+    var bIsSys = sysDBs[b.db] || 99;
+    if (aIsSys !== bIsSys) return aIsSys - bIsSys;
+    if (a.db !== b.db) return a.db.localeCompare(b.db);
+    return b.count - a.count;
+  });
+  groups = groups.slice(0, 50);
+
+  document.getElementById('error-group-count').textContent = groups.length;
+
+  if (groups.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty-state">Nenhum erro detectado.</td></tr>';
+    return;
+  }
+
+  for (var i = 0; i < groups.length; i++) {
+    var g = groups[i];
+    var badgeCls = 'badge-fatal';
+    if (g.level === 'ERROR') badgeCls = 'badge-error';
+    else if (g.level === 'WARNING') badgeCls = 'badge-warn';
+    else if (g.level === 'SSL_ERR' || g.level === 'LOG') badgeCls = 'badge-log';
+
+    var tr = document.createElement('tr');
+    tr.style.cursor = 'pointer';
+    tr.setAttribute('data-idx', i);
+    tr.onclick = (function(idx, grp) {
+      return function() { toggleDetail(idx, grp); };
+    })(i, g);
+    tr.innerHTML = '<td><span class="badge ' + badgeCls + '">' + g.level + '</span></td>' +
+      '<td class="mono">' + escHtml(g.db) + '</td>' +
+      '<td class="mono">' + escHtml(g.pattern) + '</td>' +
+      '<td style="text-align:right">' + g.count.toLocaleString() + '</td>' +
+      '<td style="text-align:center"><button class="btn-sm" data-detail-btn="' + i + '">&#9660; Amostras</button></td>';
+    tbody.appendChild(tr);
+
+    var detailTr = document.createElement('tr');
+    detailTr.className = 'detail-row';
+    detailTr.id = 'detail-' + i;
+    var detailTd = document.createElement('td');
+    detailTd.colSpan = 5;
+    detailTr.appendChild(detailTd);
+    tbody.appendChild(detailTr);
+  }
+}
+
+function toggleDetail(idx, group) {
+  var row = document.getElementById('detail-' + idx);
+  if (!row) return;
+
+  if (row.classList.contains('open')) {
+    row.classList.remove('open');
+    return;
+  }
+
+  document.querySelectorAll('.detail-row.open').forEach(function(r) { r.classList.remove('open'); });
+
+  var td = row.querySelector('td');
+  var html = '<div class="raw-log-container">';
+  var samples = group.samples;
+  for (var i = 0; i < samples.length; i++) {
+    html += '<div class="raw-log-line">' + escHtml(samples[i].raw) + '</div>';
+  }
+  html += '</div>';
+  td.innerHTML = html;
+
+  row.classList.add('open');
+}
+
+// ═══════════════════════════════════════
+// Tabela de Conexões
+// ═══════════════════════════════════════
+var connSortCol = 'default';
+var connSortAsc = false;
+
+function sortConn(col) {
+  if (connSortCol === col) {
+    connSortAsc = !connSortAsc;
+  } else {
+    connSortCol = col;
+    connSortAsc = false;
+  }
+  renderConnectionsTable();
+}
+
+function resetConnSort() {
+  connSortCol = 'default';
+  connSortAsc = false;
+  renderConnectionsTable();
+}
+
+function renderConnectionsTable() {
+  var tbody = document.getElementById('tbody-conn-users');
+  tbody.innerHTML = '';
+  var items = Object.keys(connStats).map(function(k) { return connStats[k]; });
+  var sysDBs = { 'azure_sys': 1, 'azure_maintenance': 2, 'postgres': 3, 'template1': 4 };
+  items.sort(function(a, b) {
+    if (connSortCol === 'default') {
+      var aIsSys = sysDBs[a.db] || 99;
+      var bIsSys = sysDBs[b.db] || 99;
+      if (aIsSys !== bIsSys) return aIsSys - bIsSys;
+      if (a.db !== b.db) return a.db.localeCompare(b.db);
+      return (b.conn + b.disconn) - (a.conn + a.disconn);
+    } else {
+      var valA = a[connSortCol] || 0;
+      var valB = b[connSortCol] || 0;
+      if (valA === valB) {
+        if (a.db !== b.db) return a.db.localeCompare(b.db);
+        return 0;
+      }
+      return connSortAsc ? (valA - valB) : (valB - valA);
+    }
+  });
+
+  var thConn = document.getElementById('th-conn');
+  var thDisconn = document.getElementById('th-disconn');
+  var thSsl = document.getElementById('th-sslerr');
+  if (thConn && thDisconn && thSsl) {
+    thConn.innerHTML = 'Conexões' + (connSortCol === 'conn' ? (connSortAsc ? ' &#9650;' : ' &#9660;') : '');
+    thDisconn.innerHTML = 'Desconexões' + (connSortCol === 'disconn' ? (connSortAsc ? ' &#9650;' : ' &#9660;') : '');
+    thSsl.innerHTML = 'SSL Errors' + (connSortCol === 'sslerr' ? (connSortAsc ? ' &#9650;' : ' &#9660;') : '');
+  }
+  var btnReset = document.getElementById('btn-reset-conn');
+  if (btnReset) {
+    btnReset.style.display = (connSortCol === 'default') ? 'none' : 'inline-block';
+  }
+  items = items.slice(0, 50);
+
+  document.getElementById('conn-user-count').textContent = items.length;
+
+  if (items.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" class="empty-state">Nenhuma conexão detectada.</td></tr>';
+    return;
+  }
+
+  for (var i = 0; i < items.length; i++) {
+    var c = items[i];
+    var tr = document.createElement('tr');
+    tr.innerHTML = '<td class="mono">' + escHtml(c.db) + '</td>' +
+      '<td class="mono">' + escHtml(c.app) + '</td>' +
+      '<td class="mono">' + escHtml(c.user) + '</td>' +
+      '<td style="text-align:right">' + c.conn.toLocaleString() + '</td>' +
+      '<td style="text-align:right">' + c.disconn.toLocaleString() + '</td>' +
+      '<td style="text-align:right;color:' + (c.sslerr > 0 ? 'var(--red)' : 'var(--text3)') + '">' + c.sslerr.toLocaleString() + '</td>';
+    tbody.appendChild(tr);
+  }
+}
+
+// ═══════════════════════════════════════
+// Amostragem / Raw Logs
+// ═══════════════════════════════════════
+function debouncedRenderSamples() {
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(renderSamples, 250);
+}
+
+function renderSamples() {
+  var container = document.getElementById('rawLogsContainer');
+  container.innerHTML = '';
+  var search = document.getElementById('searchInput').value.toLowerCase();
+  var levelF = document.getElementById('levelFilter').value;
+
+  var filtered = [];
+  for (var i = 0; i < logEntries.length; i++) {
+    var e = logEntries[i];
+    if (levelF !== 'ALL') {
+      if (levelF === 'FATAL' && e.level !== 'FATAL' && e.level !== 'PANIC') continue;
+      if (levelF !== 'FATAL' && e.level !== levelF) continue;
+    }
+    if (search && e.rawLower.indexOf(search) === -1) continue;
+    filtered.push(e);
+  }
+
+  var toShow = (search.length > 0) ? filtered : filtered.slice(-200);
+
+  if (search.length > 0) {
+    document.getElementById('sampleCountDisplay').textContent = 'Encontrados ' + filtered.length.toLocaleString() + ' logs correspondentes à busca.';
+  } else {
+    document.getElementById('sampleCountDisplay').textContent = 'Total de ' + filtered.length.toLocaleString() + ' logs. Mostrando as últimas ' + toShow.length + ' entradas (faça uma busca para ver todos).';
+  }
+
+  if (toShow.length === 0) {
+    container.innerHTML = '<div class="empty-state">Nenhuma linha corresponde ao filtro.</div>';
+    return;
+  }
+
+  var frag = document.createDocumentFragment();
+  for (var j = 0; j < toShow.length; j++) {
+    var div = document.createElement('div');
+    div.className = 'raw-log-line';
+    div.textContent = toShow[j].raw;
+    frag.appendChild(div);
+  }
+  container.appendChild(frag);
+}
+
+// ═══════════════════════════════════════
+// Recomendações
+// ═══════════════════════════════════════
+function errorPatternCount(patternText) {
+  var c = 0;
+  var keys = Object.keys(errorGroups);
+  for (var i = 0; i < keys.length; i++) {
+    var g = errorGroups[keys[i]];
+    if (g.pattern.indexOf(patternText) !== -1 || g.level === patternText) {
+      c += g.count;
+    }
+  }
+  return c;
+}
+
+function renderRecommendations(stats) {
+  var container = document.getElementById('recommendations-container');
+  if(!container) return;
+  container.innerHTML = '';
+  var activeCount = 0;
+
+  if (typeof recommendationRules === 'undefined' || logEntries.length === 0) {
+     container.innerHTML = '<div class="empty-state" style="grid-column: 1 / -1; margin-top:20px;">' +
+        (logEntries.length === 0 ? 'Carregue um arquivo de log para ver as recomendações.' : 'Erro: recommendations.js não encontrado ou não carregado.') + '</div>';
+     document.getElementById('rec-count').textContent = '0';
+     return;
+  }
+
+  var frag = document.createDocumentFragment();
+  for (var i = 0; i < recommendationRules.length; i++) {
+    var rule = recommendationRules[i];
+    var isTriggered = false;
+    try {
+      var func = new Function('stats', 'errorGroups', 'errorPatternCount', rule.condition);
+      isTriggered = func(stats, errorGroups, errorPatternCount);
+    } catch(e) {
+      console.error("Erro avaliando regra", rule.id, e);
+    }
+
+    if (isTriggered) {
+      activeCount++;
+      var card = document.createElement('div');
+      card.className = 'rec-card ' + rule.severity;
+      card.innerHTML = '<div class="rec-header"><div class="rec-title">' + escHtml(rule.title) + '</div><div class="rec-badge ' + rule.severity + '">' + rule.severity + '</div></div>' +
+                       '<div class="rec-desc">' + escHtml(rule.description) + '</div>' +
+                       '<a href="' + escHtml(rule.reference) + '" target="_blank" class="rec-link">Ver Documentação &#8594;</a>';
+      frag.appendChild(card);
+    }
+  }
+
+  if (activeCount === 0) {
+    container.innerHTML = '<div class="empty-state" style="grid-column: 1 / -1; margin-top:20px;">Nenhuma anomalia grave detectada. O servidor parece saudável nos logs selecionados!</div>';
+  } else {
+    container.appendChild(frag);
+  }
+  document.getElementById('rec-count').textContent = activeCount;
+}
+
+// ═══════════════════════════════════════
+// Gráficos
+// ═══════════════════════════════════════
+function drawAllCharts(stats) {
+  drawDbErrorsChart();
+  drawSeverityChart(stats);
+}
+
+function redrawCharts() {
+  if (logEntries.length === 0) return;
+  // Recalculate stats for severity chart
+  var stats = { total: logEntries.length, error: 0, fatal: 0, warning: 0, log: 0 };
+  for (var i = 0; i < logEntries.length; i++) {
+    var lvl = logEntries[i].level;
+    if (lvl === 'ERROR') stats.error++;
+    else if (lvl === 'FATAL' || lvl === 'PANIC') stats.fatal++;
+    else if (lvl === 'WARNING') stats.warning++;
+    else if (lvl === 'LOG') stats.log++;
+  }
+  drawAllCharts(stats);
+}
+
+function destroyChart(name) {
+  if (charts[name]) { charts[name].destroy(); charts[name] = null; }
+}
+
+
+
+function drawDbErrorsChart() {
+  destroyChart('dbErrors');
+  var dbCounts = {};
+  for (var i = 0; i < logEntries.length; i++) {
+    var e = logEntries[i];
+    if (e.level !== 'ERROR' && e.level !== 'FATAL' && e.level !== 'PANIC') continue;
+    var db = e.db || '[unknown]';
+    if (!dbCounts[db]) dbCounts[db] = { error: 0, fatal: 0, total: 0 };
+    if (e.level === 'ERROR') dbCounts[db].error++;
+    else dbCounts[db].fatal++;
+    dbCounts[db].total++;
+  }
+  var sorted = Object.keys(dbCounts).sort(function(a, b) { return dbCounts[b].total - dbCounts[a].total; }).slice(0, 10);
+  var tc = themeColors();
+
+  charts.dbErrors = new Chart(document.getElementById('chartDbErrors').getContext('2d'), {
+    type: 'bar',
+    data: {
+      labels: sorted,
+      datasets: [
+        { label: 'ERROR', data: sorted.map(function(d) { return dbCounts[d].error; }), backgroundColor: '#fb923c' },
+        { label: 'FATAL/PANIC', data: sorted.map(function(d) { return dbCounts[d].fatal; }), backgroundColor: '#f87171' }
+      ]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { labels: { color: tc.text } },
+        datalabels: {
+          display: function(context) { return context.dataset.data[context.dataIndex] > 0; },
+          color: '#fff',
+          backgroundColor: 'rgba(0, 0, 0, 0.4)',
+          borderRadius: 4,
+          font: { size: 11, weight: 'bold' },
+          padding: { top: 2, bottom: 2, left: 6, right: 6 }
+        }
+      },
+      scales: {
+        x: { stacked: true, display: false },
+        y: { stacked: true, ticks: { color: tc.text, font: { size: 12 } }, grid: { display: false } }
+      }
+    }
+  });
+}
+
+function drawSeverityChart(stats) {
+  destroyChart('severity');
+  if (!stats) return;
+  var tc = themeColors();
+  var labels = ['LOG', 'WARNING', 'ERROR', 'FATAL/PANIC'];
+  var data = [stats.log || 0, stats.warning || 0, stats.error || 0, stats.fatal || 0];
+  var colors = ['#60a5fa', '#fbbf24', '#fb923c', '#f87171'];
+
+  charts.severity = new Chart(document.getElementById('chartSeverity').getContext('2d'), {
+    type: 'doughnut',
+    data: {
+      labels: labels,
+      datasets: [{ data: data, backgroundColor: colors, borderWidth: 0 }]
+    },
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { color: tc.text, font: { size: 12 } } } } }
+  });
+}
+
+
+
+// ═══════════════════════════════════════
+// Utilitários
+// ═══════════════════════════════════════
+function escHtml(str) {
+  if (!str) return '';
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+</script>
+</body>
+</html>
