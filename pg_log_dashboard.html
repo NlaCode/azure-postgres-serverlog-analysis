@@ -137,6 +137,17 @@
   .rec-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: auto; }
   .rec-goto { font-size: 12px; color: var(--text3); background: var(--surface2, var(--bg)); border: 1px solid var(--border); border-radius: 5px; padding: 4px 10px; cursor: pointer; font-weight: 500; transition: all .15s ease; white-space: nowrap; }
   .rec-goto:hover { color: var(--primary); border-color: var(--primary); }
+  .rec-docs-wrap { position: relative; }
+  .rec-docs-btn { font-size: 13px; color: var(--primary); background: none; border: none; cursor: pointer; font-weight: 500; padding: 0; }
+  .rec-docs-btn:hover { text-decoration: underline; }
+  .rec-refs-popup { display: none; position: absolute; bottom: calc(100% + 8px); left: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.18); padding: 10px 0; min-width: 320px; max-width: 420px; z-index: 500; }
+  .rec-refs-popup.open { display: block; }
+  .rec-refs-popup::after { content: ''; position: absolute; top: 100%; left: 20px; border: 7px solid transparent; border-top-color: var(--border); }
+  .rec-refs-popup::before { content: ''; position: absolute; top: 100%; left: 21px; border: 6px solid transparent; border-top-color: var(--surface); z-index: 1; }
+  .rec-ref-item { display: flex; align-items: flex-start; gap: 8px; padding: 7px 14px; text-decoration: none; color: var(--text2); font-size: 12.5px; line-height: 1.4; transition: background .1s; }
+  .rec-ref-item:hover { background: var(--surface2, rgba(0,0,0,.04)); color: var(--text); }
+  .rec-ref-icon { flex-shrink: 0; font-size: 13px; margin-top: 1px; }
+  .rec-ref-domain { color: var(--text3); font-size: 11px; display: block; margin-top: 1px; }
   @keyframes rowHighlight { 0%,60% { background: rgba(59,130,246,.22); } 100% { background: transparent; } }
   .row-highlight { animation: rowHighlight 5s ease-out; }
 
@@ -901,8 +912,29 @@ function renderRecommendations(stats) {
       var card = document.createElement('div');
       card.className = 'rec-card ' + rule.severity;
 
-      var actionsHtml = '<div class="rec-actions">' +
-        '<a href="' + escHtml(rule.reference) + '" target="_blank" class="rec-link">Ver Documentação &#8594;</a>';
+      // Build references (support both old 'reference' and new 'references')
+      var refs = rule.references || (rule.reference ? [{ title: 'Documentação Oficial', url: rule.reference }] : []);
+
+      var docsHtml = '';
+      if (refs.length === 1) {
+        docsHtml = '<a href="' + escHtml(refs[0].url) + '" target="_blank" class="rec-link">Ver Documentação &#8594;</a>';
+      } else if (refs.length > 1) {
+        var popupId = 'rec-popup-' + rule.id;
+        var itemsHtml = '';
+        for (var r = 0; r < refs.length; r++) {
+          var domain = '';
+          try { domain = new URL(refs[r].url).hostname.replace('www.', ''); } catch(e) {}
+          var icon = domain.indexOf('postgresql.org') !== -1 ? '🐘' : (domain.indexOf('microsoft.com') !== -1 ? '☁️' : (domain.indexOf('datadoghq.com') !== -1 ? '🐶' : '📄'));
+          itemsHtml += '<a href="' + escHtml(refs[r].url) + '" target="_blank" class="rec-ref-item">' +
+            '<span class="rec-ref-icon">' + icon + '</span>' +
+            '<span>' + escHtml(refs[r].title) + '<span class="rec-ref-domain">' + escHtml(domain) + '</span></span></a>';
+        }
+        docsHtml = '<div class="rec-docs-wrap">' +
+          '<button class="rec-docs-btn" onclick="toggleRefsPopup(\'' + popupId + '\', event)">Ver Documentação (' + refs.length + ') &#8594;</button>' +
+          '<div class="rec-refs-popup" id="' + popupId + '">' + itemsHtml + '</div></div>';
+      }
+
+      var actionsHtml = '<div class="rec-actions">' + docsHtml;
 
       var rulePatterns = rule.patterns || [];
       for (var p = 0; p < rulePatterns.length; p++) {
@@ -943,6 +975,22 @@ function goToError(searchText) {
   }
   if (first) first.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
+
+function toggleRefsPopup(id, e) {
+  e.stopPropagation();
+  var popup = document.getElementById(id);
+  if (!popup) return;
+  var wasOpen = popup.classList.contains('open');
+  // Close all other popups
+  document.querySelectorAll('.rec-refs-popup.open').forEach(function(p) { p.classList.remove('open'); });
+  if (!wasOpen) popup.classList.add('open');
+}
+
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('.rec-docs-wrap')) {
+    document.querySelectorAll('.rec-refs-popup.open').forEach(function(p) { p.classList.remove('open'); });
+  }
+});
 
 // ═══════════════════════════════════════
 // Gráficos
