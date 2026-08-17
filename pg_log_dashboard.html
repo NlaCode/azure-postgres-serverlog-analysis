@@ -134,6 +134,11 @@
   .rec-desc { font-size: 13px; color: var(--text2); line-height: 1.5; margin-bottom: 12px; flex:1; }
   .rec-link { font-size: 13px; color: var(--primary); text-decoration: none; font-weight: 500; align-self: flex-start; }
   .rec-link:hover { text-decoration: underline; }
+  .rec-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: auto; }
+  .rec-goto { font-size: 12px; color: var(--text3); background: var(--surface2, var(--bg)); border: 1px solid var(--border); border-radius: 5px; padding: 4px 10px; cursor: pointer; font-weight: 500; transition: all .15s ease; white-space: nowrap; }
+  .rec-goto:hover { color: var(--primary); border-color: var(--primary); }
+  @keyframes rowHighlight { 0%,60% { background: rgba(59,130,246,.22); } 100% { background: transparent; } }
+  .row-highlight { animation: rowHighlight 5s ease-out; }
 
   body.dark {
     --bg: #0f172a; --surface: #1e293b; --surface2: #162032;
@@ -304,6 +309,7 @@ var debounceTimer = null;
 
 // Regex principal (fora das funções para performance)
 var mainRe = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) UTC \[(\d+)\]: (db=[^,]*,user=[^,]*,app=[^,]*,client=\S*)\s+(ERROR|FATAL|PANIC|WARNING|LOG):\s+(.*)/;
+var mainRe2 = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) UTC-([0-9a-fA-F.]+)-(ERROR|FATAL|PANIC|WARNING|LOG):\s+(.*)/;
 
 // ═══════════════════════════════════════
 // Dark Mode
@@ -476,22 +482,41 @@ function parseFileToEntries(raw) {
     if (!trimmed) continue;
 
     var m = line.match(mainRe);
-    if (m) {
+    var m2 = !m ? line.match(mainRe2) : null;
+
+    if (m || m2) {
       if (currentEntry) entries.push(currentEntry);
-      var meta = parseMeta(m[3]);
-      currentEntry = {
-        raw: line,
-        rawLower: line.toLowerCase(),
-        timestamp: m[1],
-        hour: m[1].substring(0, 13),
-        pid: m[2],
-        db: meta.db,
-        user: meta.user,
-        app: meta.app,
-        client: meta.client,
-        level: m[4].toUpperCase(),
-        message: m[5].trim()
-      };
+      
+      if (m) {
+        var meta = parseMeta(m[3]);
+        currentEntry = {
+          raw: line,
+          rawLower: line.toLowerCase(),
+          timestamp: m[1],
+          hour: m[1].substring(0, 13),
+          pid: m[2],
+          db: meta.db,
+          user: meta.user,
+          app: meta.app,
+          client: meta.client,
+          level: m[4].toUpperCase(),
+          message: m[5].trim()
+        };
+      } else {
+        currentEntry = {
+          raw: line,
+          rawLower: line.toLowerCase(),
+          timestamp: m2[1],
+          hour: m2[1].substring(0, 13),
+          pid: m2[2],
+          db: '',
+          user: '',
+          app: '',
+          client: '',
+          level: m2[3].toUpperCase(),
+          message: m2[4].trim()
+        };
+      }
     } else if (currentEntry) {
       currentEntry.raw += '\n' + line;
       currentEntry.rawLower += '\n' + line.toLowerCase();
@@ -661,6 +686,7 @@ function renderErrorsTable() {
     var tr = document.createElement('tr');
     tr.style.cursor = 'pointer';
     tr.setAttribute('data-idx', i);
+    tr.setAttribute('data-pattern', g.pattern);
     tr.onclick = (function(idx, grp) {
       return function() { toggleDetail(idx, grp); };
     })(i, g);
@@ -874,9 +900,22 @@ function renderRecommendations(stats) {
       activeCount++;
       var card = document.createElement('div');
       card.className = 'rec-card ' + rule.severity;
+
+      var actionsHtml = '<div class="rec-actions">' +
+        '<a href="' + escHtml(rule.reference) + '" target="_blank" class="rec-link">Ver Documentação &#8594;</a>';
+
+      var rulePatterns = rule.patterns || [];
+      for (var p = 0; p < rulePatterns.length; p++) {
+        if (errorPatternCount(rulePatterns[p]) > 0) {
+          actionsHtml += '<button class="rec-goto" onclick="goToError(\'' + escHtml(rulePatterns[p]).replace(/'/g, "\\'") + '\')">&#128270; Ver no Top Erros</button>';
+          break;
+        }
+      }
+      actionsHtml += '</div>';
+
       card.innerHTML = '<div class="rec-header"><div class="rec-title">' + escHtml(rule.title) + '</div><div class="rec-badge ' + rule.severity + '">' + rule.severity + '</div></div>' +
                        '<div class="rec-desc">' + escHtml(rule.description) + '</div>' +
-                       '<a href="' + escHtml(rule.reference) + '" target="_blank" class="rec-link">Ver Documentação &#8594;</a>';
+                       actionsHtml;
       frag.appendChild(card);
     }
   }
@@ -887,6 +926,22 @@ function renderRecommendations(stats) {
     container.appendChild(frag);
   }
   document.getElementById('rec-count').textContent = activeCount;
+}
+
+function goToError(searchText) {
+  switchTab('errors');
+  var rows = document.querySelectorAll('#tbody-errors tr[data-pattern]');
+  var first = null;
+  for (var i = 0; i < rows.length; i++) {
+    var pattern = rows[i].getAttribute('data-pattern');
+    if (pattern && pattern.indexOf(searchText) !== -1) {
+      rows[i].classList.remove('row-highlight');
+      void rows[i].offsetWidth;
+      rows[i].classList.add('row-highlight');
+      if (!first) first = rows[i];
+    }
+  }
+  if (first) first.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
 // ═══════════════════════════════════════
