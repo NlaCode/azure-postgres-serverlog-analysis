@@ -107,6 +107,10 @@
   #loading { position: fixed; inset: 0; background: rgba(240,242,245,0.85); display: none; align-items: center; justify-content: center; z-index: 999; font-size: 15px; font-weight: 600; color: var(--text2); gap: 12px; flex-direction: column; }
   .spinner { width: 32px; height: 32px; border: 4px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: spin 0.8s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
+  .progress-wrap { width: 320px; display: none; flex-direction: column; align-items: center; gap: 6px; }
+  .progress-bar-outer { width: 100%; height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
+  .progress-bar-inner { height: 100%; width: 0%; background: linear-gradient(90deg, var(--primary), var(--teal)); border-radius: 4px; transition: width 0.2s; }
+  .progress-text { font-size: 12px; color: var(--text3); font-weight: 400; }
 
   .switch { position: relative; width: 36px; height: 20px; cursor: pointer; display: inline-block; }
   .switch input { opacity: 0; width: 0; height: 0; }
@@ -166,7 +170,7 @@
 </head>
 <body>
 
-<div id="loading"><div class="spinner"></div><div>Analisando Log...</div></div>
+<div id="loading"><div class="spinner"></div><div id="loading-label">Analisando Log...</div><div class="progress-wrap" id="progressWrap"><div class="progress-bar-outer"><div class="progress-bar-inner" id="progressBar"></div></div><div class="progress-text" id="progressText">0%</div></div></div>
 
 <header>
   <div class="header-logo">P</div>
@@ -352,30 +356,127 @@ function switchTab(id) {
 }
 
 // ═══════════════════════════════════════
-// Multi-Log File Reader
+// Multi-Log File Reader (streaming em chunks para arquivos grandes)
 // ═══════════════════════════════════════
+var CHUNK_SIZE = 50 * 1024 * 1024; // 50 MB por chunk
+
+function showProgress(pct, label) {
+  var wrap = document.getElementById('progressWrap');
+  var bar  = document.getElementById('progressBar');
+  var txt  = document.getElementById('progressText');
+  var lbl  = document.getElementById('loading-label');
+  if (wrap) wrap.style.display = 'flex';
+  if (bar)  bar.style.width = pct + '%';
+  if (txt)  txt.textContent = pct + '%';
+  if (lbl && label) lbl.textContent = label;
+}
+
+function hideProgress() {
+  var wrap = document.getElementById('progressWrap');
+  var bar  = document.getElementById('progressBar');
+  var lbl  = document.getElementById('loading-label');
+  if (wrap) wrap.style.display = 'none';
+  if (bar)  bar.style.width = '0%';
+  if (lbl)  lbl.textContent = 'Analisando Log...';
+}
+
+function readFileInChunks(file, callback) {
+  var fileSize = file.size;
+  var offset = 0;
+  var entries = [];
+  var leftover = '';  // texto parcial entre chunks
+
+  function readNextChunk() {
+    if (offset >= fileSize) {
+      // Processar última linha parcial (leftover)
+      if (leftover.trim()) {
+        var lastEntries = parseFileToEntries(leftover);
+        for (var k = 0; k < lastEntries.length; k++) entries.push(lastEntries[k]);
+      }
+      callback(entries);
+      return;
+    }
+
+    var end = Math.min(offset + CHUNK_SIZE, fileSize);
+    var slice = file.slice(offset, end);
+    var reader = new FileReader();
+
+    reader.onerror = function() {
+      console.error('Erro lendo arquivo:', file.name, reader.error);
+      alert('Erro ao ler o arquivo "' + file.name + '": ' + (reader.error ? reader.error.message : 'erro desconhecido'));
+      document.getElementById('loading').style.display = 'none';
+      hideProgress();
+    };
+
+    reader.onload = function(ev) {
+      var text = leftover + ev.target.result;
+
+      // Encontrar a última quebra de linha para não cortar uma linha no meio
+      var lastNL = text.lastIndexOf('\n');
+      if (lastNL === -1 && end < fileSize) {
+        // Chunk sem nenhuma quebra de linha — guardar tudo como leftover
+        leftover = text;
+      } else if (end < fileSize) {
+        // Processar até a última quebra de linha; guardar o resto
+        var processable = text.substring(0, lastNL + 1);
+        leftover = text.substring(lastNL + 1);
+        var chunkEntries = parseFileToEntries(processable);
+        for (var k = 0; k < chunkEntries.length; k++) entries.push(chunkEntries[k]);
+      } else {
+        // Último chunk — processar tudo
+        leftover = '';
+        var chunkEntries = parseFileToEntries(text);
+        for (var k = 0; k < chunkEntries.length; k++) entries.push(chunkEntries[k]);
+      }
+
+      offset = end;
+      var pct = Math.min(99, Math.round((offset / fileSize) * 100));
+      var sizeMB = Math.round(fileSize / 1024 / 1024);
+      showProgress(pct, 'Lendo ' + file.name + ' (' + sizeMB + ' MB)...');
+
+      // Usar setTimeout para não travar a UI thread
+      setTimeout(readNextChunk, 0);
+    };
+
+    reader.readAsText(slice);
+  }
+
+  readNextChunk();
+}
+
 document.getElementById('logFileInput').addEventListener('change', function(e) {
   var files = e.target.files;
   if (!files || files.length === 0) return;
   document.getElementById('loading').style.display = 'flex';
 
-  var pending = files.length;
-  for (var i = 0; i < files.length; i++) {
-    (function(file) {
-      var reader = new FileReader();
-      reader.onload = function(ev) {
-        var entries = parseFileToEntries(ev.target.result);
-        logFiles[file.name] = entries;
-        pending--;
-        if (pending === 0) {
-          updateLogSelector();
-          rebuildAndRender();
-          document.getElementById('loading').style.display = 'none';
-        }
-      };
-      reader.readAsText(file);
-    })(files[i]);
+  var fileList = [];
+  for (var i = 0; i < files.length; i++) fileList.push(files[i]);
+  var idx = 0;
+
+  function processNextFile() {
+    if (idx >= fileList.length) {
+      showProgress(100, 'Renderizando dashboard...');
+      setTimeout(function() {
+        updateLogSelector();
+        rebuildAndRender();
+        document.getElementById('loading').style.display = 'none';
+        hideProgress();
+      }, 50);
+      return;
+    }
+
+    var file = fileList[idx];
+    showProgress(0, 'Lendo ' + file.name + ' (' + Math.round(file.size / 1024 / 1024) + ' MB)...');
+
+    readFileInChunks(file, function(entries) {
+      logFiles[file.name] = entries;
+      idx++;
+      processNextFile();
+    });
   }
+
+  processNextFile();
+
   // Reset input so same file can be re-loaded
   e.target.value = '';
 });
@@ -490,6 +591,12 @@ function parseFileToEntries(raw) {
     var line = lines[i];
     if (!line) continue;
     var trimmed = line.trim();
+    if (!trimmed) continue;
+
+    // Limpar sufixo de exportação Azure JSON (ex: ","LOCPATH": "/usr/lib/...")
+    var locIdx = line.indexOf('","LOCPATH"');
+    if (locIdx !== -1) line = line.substring(0, locIdx);
+    trimmed = line.trim();
     if (!trimmed) continue;
 
     var m = line.match(mainRe);
