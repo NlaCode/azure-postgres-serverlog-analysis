@@ -94,7 +94,7 @@ var recommendationRules = [
     "severity": "WARNING",
     "condition": "return (errorPatternCount('permission denied') > 0 && errorPatternCount('datadog') > 0) || errorPatternCount('schema \"datadog\" does not exist') > 0;",
     "patterns": ["permission denied", "datadog"],
-    "description": "Erros de permissão ou schema inexistente envolvendo o agente do Datadog. Certifique-se de que o usuário 'datadog' tenha recebido os privilégios corretos (ex: pg_monitor) e que o schema 'datadog' com a função explain_statement exista no banco de dados monitorado.",
+    "description": "Erros de permissão ou schema inexistente envolvendo o agente do Datadog. Certifique-se de que o usuário 'datadog' tenha recebido os privilégios corretos (ex: pg_monitor para acessar funções como pg_ls_waldir e pg_show_all_file_settings) e que o schema 'datadog' com a função explain_statement exista no banco de dados monitorado.",
     "references": [
       { "title": "Datadog — PostgreSQL Integration", "url": "https://docs.datadoghq.com/integrations/postgres/?tab=host" },
       { "title": "Datadog — Database Monitoring Setup", "url": "https://docs.datadoghq.com/database_monitoring/setup_postgres/" },
@@ -166,13 +166,59 @@ var recommendationRules = [
     "id": "connection_client_lost",
     "title": "Conexão com o Cliente Perdida",
     "severity": "WARNING",
-    "condition": "return errorPatternCount('connection to client lost') > 0;",
-    "patterns": ["connection to client lost"],
+    "condition": "return errorPatternCount('connection to client lost') > 0 || errorPatternCount('could not receive data from client') > 0;",
+    "patterns": ["connection to client lost", "could not receive data from client"],
     "description": "O banco de dados detectou que a conexão TCP foi encerrada abruptamente pelo cliente. Isso geralmente é causado por: a aplicação foi encerrada/crachou subitamente (ex: Out of Memory no pod da aplicação), problemas de rede (firewall/timeout), ou o timeout interno da aplicação esgotou e ela dropou a conexão sem encerrá-la amigavelmente.",
     "references": [
       { "title": "PostgreSQL — log_disconnections", "url": "https://www.postgresql.org/docs/current/runtime-config-logging.html#GUC-LOG-DISCONNECTIONS" },
       { "title": "PostgreSQL — TCP Keepalives", "url": "https://www.postgresql.org/docs/current/runtime-config-connection.html#RUNTIME-CONFIG-CONNECTION-SETTINGS" },
       { "title": "Azure — Networking Overview", "url": "https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-networking" }
+    ]
+  },
+  {
+    "id": "query_store_disabled",
+    "title": "Query Store Desativado",
+    "severity": "INFO",
+    "condition": "return errorPatternCount('query data store as off') > 0;",
+    "patterns": ["query data store as off"],
+    "description": "O Query Store está desativado no servidor. O Query Store é uma ferramenta nativa do Azure PostgreSQL essencial para o monitoramento de performance e identificação de queries lentas no longo prazo. Recomenda-se ativá-lo definindo o parâmetro 'pg_qs.query_capture_mode' para 'TOP' ou 'ALL'.",
+    "references": [
+      { "title": "Azure - Query Store", "url": "https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-query-store" }
+    ]
+  },
+  {
+    "id": "entra_id_not_configured",
+    "title": "Microsoft Entra ID (Azure AD) Não Configurado",
+    "severity": "INFO",
+    "condition": "return errorPatternCount('aad_tenant_id is NULL') > 0;",
+    "patterns": ["aad_tenant_id is NULL"],
+    "description": "O servidor não está utilizando autenticação via Microsoft Entra ID (antigo Azure AD). Configurar o Entra ID permite centralizar a gestão de identidades e habilitar políticas avançadas de segurança (como MFA) para o acesso ao banco de dados.",
+    "references": [
+      { "title": "Azure - Microsoft Entra authentication", "url": "https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-azure-ad-authentication" }
+    ]
+  },
+  {
+    "id": "value_too_long",
+    "title": "Valor Excede Tamanho da Coluna (Value Too Long)",
+    "severity": "CRITICAL",
+    "condition": "return errorPatternCount('value too long for type character varying') > 0;",
+    "patterns": ["value too long for type character varying"],
+    "description": "A aplicação tentou inserir um valor que excede o tamanho máximo definido para a coluna (ex: um campo varchar(9) recebeu uma string com mais de 9 caracteres). Isso pode indicar que o limite da coluna está subdimensionado ou que os dados não estão sendo validados/truncados antes da inserção. Revise o schema do banco (ALTER TABLE ... ALTER COLUMN ... TYPE varchar(N)) ou adicione validação na aplicação.",
+    "references": [
+      { "title": "PostgreSQL — Character Types", "url": "https://www.postgresql.org/docs/current/datatype-character.html" },
+      { "title": "PostgreSQL — ALTER TABLE", "url": "https://www.postgresql.org/docs/current/sql-altertable.html" }
+    ]
+  },
+  {
+    "id": "unique_constraint_violation",
+    "title": "Violação de Constraint Única (Duplicate Key)",
+    "severity": "WARNING",
+    "condition": "return errorPatternCount('duplicate key value violates unique constraint') > 0;",
+    "patterns": ["duplicate key value violates unique constraint"],
+    "description": "A aplicação tentou inserir ou atualizar um registro com um valor que já existe em uma coluna com constraint UNIQUE. Isso pode ser causado por retries excessivos sem idempotência, condições de corrida entre workers, ou lógica de upsert ausente. Considere usar INSERT ... ON CONFLICT (upsert) para tratar inserções duplicadas de forma graceful.",
+    "references": [
+      { "title": "PostgreSQL — INSERT ON CONFLICT", "url": "https://www.postgresql.org/docs/current/sql-insert.html#SQL-ON-CONFLICT" },
+      { "title": "PostgreSQL — Unique Constraints", "url": "https://www.postgresql.org/docs/current/ddl-constraints.html#DDL-CONSTRAINTS-UNIQUE-CONSTRAINTS" }
     ]
   }
 ];
